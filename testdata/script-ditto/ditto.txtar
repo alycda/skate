@@ -1,0 +1,82 @@
+# The environment (SKATE_BACKEND=ditto and the connection settings) comes from
+# cli_ditto_test.go. Nothing here starts sync.
+
+exec skate set kitty meow
+exec skate get kitty
+stdout '^meow$'
+
+stdin value.txt
+exec skate set stdin-key
+exec skate get stdin-key
+stdout '^from stdin$'
+
+exec skate set b 2
+exec skate set a 1
+exec skate list -k
+cmp stdout keys.txt
+exec skate list -k -r
+cmp stdout keys-reversed.txt
+exec skate list
+stdout '^a\t1$'
+stdout '^kitty\tmeow$'
+
+# overwrite, then delete
+exec skate set kitty purr
+exec skate get kitty
+stdout '^purr$'
+exec skate rm kitty
+! exec skate get kitty
+stderr 'Key not found'
+! exec skate get never-set
+stderr 'Key not found'
+
+# @db keeps keys apart, and list-dbs sees them
+exec skate set secret@work hunter2
+exec skate get secret@work
+stdout '^hunter2$'
+! exec skate get secret
+stderr 'Key not found'
+exec skate list @work
+stdout '^secret\thunter2$'
+exec skate list-dbs
+cmp stdout dbs.txt
+
+# delete-db: declined, typo, confirmed
+stdin no.txt
+exec skate delete-db @work
+stderr 'Did not delete'
+exec skate list-dbs
+stdout '^@work$'
+! exec skate delete-db @wrk
+stderr 'did you mean "@work"'
+stdin yes.txt
+exec skate delete-db @work
+stderr 'Deleted'
+exec skate list-dbs
+! stdout '^@work$'
+! exec skate get secret@work
+
+# Ditto keeps its files in the store, and badger's list-dbs ignores them
+exists store/.ditto-00000000-0000-4000-8000-000000000000
+exec skate --backend badger list-dbs
+! stdout 'ditto'
+
+-- value.txt --
+from stdin
+-- keys.txt --
+a
+b
+kitty
+stdin-key
+-- keys-reversed.txt --
+stdin-key
+kitty
+b
+a
+-- dbs.txt --
+@default
+@work
+-- no.txt --
+n
+-- yes.txt --
+y

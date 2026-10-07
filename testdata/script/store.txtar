@@ -1,0 +1,19 @@
+# --store picks the directory that holds the databases
+exec skate --store $WORK/alt set x y
+exists alt/default
+exec skate --store $WORK/alt get x
+stdout '^y$'
+! exec skate get x
+stderr 'Key not found'
+
+# SKATE_STORE does the same for a whole shell session
+env SKATE_STORE=$WORK/viaenv
+exec skate set k v
+exists viaenv/default
+exec skate get k
+stdout '^v$'
+
+# and --store wins over SKATE_STORE
+exec skate --store $WORK/alt get x
+stdout '^y$'
+! exists viaenv/alt
