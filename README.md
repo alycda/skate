@@ -212,6 +212,21 @@ Things to know:
 - Binary values are stored base64-encoded, so they are not readable in the
   Ditto Portal. Keys must be valid UTF-8.
 
+**Testing.** `go test ./...` covers the default build. `go test -tags ditto
+./...` also runs the backend against Ditto's local store and drives the CLI
+with the scripts in `testdata/script-ditto`; it needs the native library on the
+linker and loader paths. The `ditto` workflow does this in CI. Neither starts
+real sync. To check your Portal setup before running `skate sync`, use the
+[hurl](https://hurl.dev) files in `test/hurl`:
+
+```bash
+hurl --test --variable auth_url=<Auth URL> --variable database_id=<Database ID> \
+  test/hurl/ditto-auth-reachable.hurl
+```
+
+`ditto-auth-reachable.hurl` needs no token. `ditto-auth-login.hurl` also takes
+`--variable token=<development token>`; read the caveat at its top.
+
 ## Examples
 
 Here are some of our favorite ways to use `skate`.
