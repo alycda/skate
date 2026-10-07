@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,10 +32,33 @@ func TestMain(m *testing.M) {
 // system path. testscript environments are otherwise hermetic.
 var loaderVars = []string{"LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"}
 
+// normalizeNewlines rewrites CRLF to LF in the extracted fixtures. They are
+// compared byte for byte with skate's output, which uses LF on every platform,
+// but a Windows checkout with core.autocrlf rewrites them to CRLF. The repo's
+// .gitattributes asks for LF; this covers clones made before that applied.
+func normalizeNewlines(dir string) error {
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if n := bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")); len(n) != len(b) {
+			return os.WriteFile(path, n, 0o666)
+		}
+		return nil
+	})
+}
+
 func scriptParams(dir string, env ...string) testscript.Params {
 	return testscript.Params{
 		Dir: dir,
 		Setup: func(e *testscript.Env) error {
+			if err := normalizeNewlines(e.WorkDir); err != nil {
+				return err
+			}
 			e.Setenv("SKATE_STORE", filepath.Join(e.WorkDir, "store"))
 			for _, k := range loaderVars {
 				if v, ok := os.LookupEnv(k); ok {
