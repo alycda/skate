@@ -1,0 +1,54 @@
+name: ditto
+
+# The ditto backend is behind a build tag and needs Ditto's native library, so
+# the shared build and lint workflows never compile it. This one does, so an
+# SDK bump or a preview API change shows up as a failure here.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (-tags ditto, linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # The native library is versioned with the Go module: module
+      # v5.0.0-go-preview.3 pairs with library 5.0.0-go-preview.3.
+      - name: Resolve the SDK version
+        run: |
+          v=$(go list -m -f '{{.Version}}' github.com/getditto/ditto-go-sdk/v5)
+          echo "DITTO_VERSION=${v#v}" >> "$GITHUB_ENV"
+
+      - name: Cache the native library
+        id: lib-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/dittolib
+          key: libdittoffi-linux-x86_64-${{ env.DITTO_VERSION }}
+
+      - name: Download the native library
+        if: steps.lib-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/dittolib"
+          curl -fsSL "https://software.ditto.live/go/Ditto/${DITTO_VERSION}/dist/libdittoffi-linux-x86_64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/dittolib" ./libdittoffi.so
+
+      - name: Point the linker and loader at it
+        run: |
+          echo "CGO_ENABLED=1" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-L$RUNNER_TEMP/dittolib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/dittolib" >> "$GITHUB_ENV"
+
+      - run: go vet -tags ditto ./...
+
+      - run: go test -tags ditto -count=1 ./...
