@@ -11,13 +11,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/agnivade/levenshtein"
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/fang"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/dgraph-io/badger/v4"
 	gap "github.com/muesli/go-app-paths"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -31,6 +31,8 @@ var (
 	delimiterIterate string
 	copyToClipboard  bool
 	storePath        string
+	backendFlag      string
+	syncTimeout      time.Duration
 
 	warningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("204")).Bold(true)
 
@@ -84,6 +86,13 @@ var (
 		RunE:    listDbs,
 	}
 
+	syncCmd = &cobra.Command{
+		Use:   "sync",
+		Short: "Sync the ditto backend with its peers until interrupted or --timeout elapses.",
+		Args:  cobra.NoArgs,
+		RunE:  syncDitto,
+	}
+
 	deleteDbCmd = &cobra.Command{
 		Use:     "delete-db [@DB]",
 		Hidden:  false,
@@ -117,17 +126,13 @@ func set(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close() //nolint:errcheck
 	if len(args) == 2 {
-		return wrap(db, false, func(tx *badger.Txn) error {
-			return tx.Set(k, []byte(args[1]))
-		})
+		return db.Set(k, []byte(args[1]))
 	}
 	bts, err := io.ReadAll(cmd.InOrStdin())
 	if err != nil {
 		return err
 	}
-	return wrap(db, false, func(tx *badger.Txn) error {
-		return tx.Set(k, bts)
-	})
+	return db.Set(k, bts)
 }
 
 //nolint:wrapcheck
@@ -141,15 +146,8 @@ func get(_ *cobra.Command, args []string) error {
 		return err
 	}
 	defer db.Close() //nolint:errcheck
-	var v []byte
-	if err := wrap(db, true, func(tx *badger.Txn) error {
-		item, err := tx.Get(k)
-		if err != nil {
-			return err
-		}
-		v, err = item.ValueCopy(nil)
-		return err
-	}); err != nil {
+	v, err := db.Get(k)
+	if err != nil {
 		return err
 	}
 	printFromKV("%s", v)
@@ -159,6 +157,7 @@ func get(_ *cobra.Command, args []string) error {
 	return nil
 }
 
+//nolint:wrapcheck
 func del(_ *cobra.Command, args []string) error {
 	k, n, err := keyParser(args[0])
 	if err != nil {
@@ -170,9 +169,7 @@ func del(_ *cobra.Command, args []string) error {
 	}
 	defer db.Close() //nolint:errcheck
 
-	return wrap(db, false, func(tx *badger.Txn) error {
-		return tx.Delete(k)
-	})
+	return db.Delete(k)
 }
 
 // TODO: use lists/tables/trees for this?
@@ -188,6 +185,14 @@ func listDbs(*cobra.Command, []string) error {
 //
 //nolint:wrapcheck
 func getDbs() ([]string, error) {
+	b, err := backendName()
+	if err != nil {
+		return nil, err
+	}
+	if b == backendDitto {
+		names, err := dittoDbs()
+		return formatDbs(names), err
+	}
 	filepath, err := getFilePath()
 	if err != nil {
 		return nil, err
@@ -198,7 +203,7 @@ func getDbs() ([]string, error) {
 	}
 	var dbList []string
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() && !isDittoDir(e.Name()) {
 			dbList = append(dbList, e.Name())
 		}
 	}
@@ -240,6 +245,13 @@ func getFilePath(args ...string) (string, error) {
 //
 //nolint:wrapcheck
 func deleteDb(_ *cobra.Command, args []string) error {
+	b, err := backendName()
+	if err != nil {
+		return err
+	}
+	if b == backendDitto {
+		return deleteDittoDb(args[0])
+	}
 	path, err := findDb(args[0])
 	var errNotFound errDBNotFound
 	if errors.As(err, &errNotFound) {
@@ -250,22 +262,16 @@ func deleteDb(_ *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "unexpected error: %s", err.Error())
 		os.Exit(1)
 	}
-	var confirmation string
-
 	home, err := os.UserHomeDir()
 	showpath := path
 	if err == nil && strings.HasPrefix(path, home) {
 		showpath = filepath.Join("~", strings.TrimPrefix(showpath, home))
 	}
-	message := fmt.Sprintf("Are you sure you want to delete '%s' and all its contents? (y/n)", warningStyle.Render(showpath))
-	message = lipgloss.NewStyle().Width(78).Render(message)
-	fmt.Println(message)
-
-	// TODO: use huh
-	if _, err := fmt.Scanln(&confirmation); err != nil {
+	confirmed, err := confirmDelete(showpath)
+	if err != nil {
 		return err
 	}
-	if confirmation == "y" {
+	if confirmed {
 		if err := os.RemoveAll(path); err != nil {
 			return err
 		}
@@ -274,6 +280,23 @@ func deleteDb(_ *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "Did not delete %q\n", showpath)
 	return nil
+}
+
+// confirmDelete asks on stdin whether target and all its contents may be
+// deleted.
+//
+//nolint:wrapcheck
+func confirmDelete(target string) (bool, error) {
+	var confirmation string
+	message := fmt.Sprintf("Are you sure you want to delete '%s' and all its contents? (y/n)", warningStyle.Render(target))
+	message = lipgloss.NewStyle().Width(78).Render(message)
+	fmt.Println(message)
+
+	// TODO: use huh
+	if _, err := fmt.Scanln(&confirmation); err != nil {
+		return false, err
+	}
+	return confirmation == "y", nil
 }
 
 // findDb: returns the path to the named db or an errDBNotFound if no
@@ -293,18 +316,23 @@ func findDb(name string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		var suggestions []string
-		for _, db := range dbs {
-			diff := int(math.Abs(float64(len(db) - len(name))))
-			levenshteinDistance := levenshtein.ComputeDistance(name, db)
-			suggestByLevenshtein := levenshteinDistance <= diff
-			if suggestByLevenshtein {
-				suggestions = append(suggestions, db)
-			}
-		}
-		return "", errDBNotFound{suggestions: suggestions}
+		return "", errDBNotFound{suggestions: suggestDbs(name, dbs)}
 	}
 	return path, nil
+}
+
+// suggestDbs: returns the dbs close enough to name to be a likely typo.
+func suggestDbs(name string, dbs []string) []string {
+	var suggestions []string
+	for _, db := range dbs {
+		diff := int(math.Abs(float64(len(db) - len(name))))
+		levenshteinDistance := levenshtein.ComputeDistance(name, db)
+		suggestByLevenshtein := levenshteinDistance <= diff
+		if suggestByLevenshtein {
+			suggestions = append(suggestions, db)
+		}
+	}
+	return suggestions
 }
 
 //nolint:wrapcheck
@@ -331,37 +359,15 @@ func list(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	err = db.Sync()
-	if err != nil {
-		return err
-	}
-	return db.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.PrefetchSize = 10
-		opts.Reverse = reverseIterate
-		if keysIterate {
-			opts.PrefetchValues = false
-		}
-		it := txn.NewIterator(opts)
-		defer it.Close()
-		for it.Rewind(); it.Valid(); it.Next() {
-			item := it.Item()
-			k := item.Key()
-			if keysIterate {
-				printFromKV(pf, k)
-				continue
-			}
-			err := item.Value(func(v []byte) error {
-				if valuesIterate {
-					printFromKV(pf, v)
-				} else {
-					printFromKV(pf, k, v)
-				}
-				return nil
-			})
-			if err != nil {
-				return err
-			}
+	defer db.Close() //nolint:errcheck
+	return db.Scan(scanOptions{reverse: reverseIterate, keysOnly: keysIterate}, func(k, v []byte) error {
+		switch {
+		case keysIterate:
+			printFromKV(pf, k)
+		case valuesIterate:
+			printFromKV(pf, v)
+		default:
+			printFromKV(pf, k, v)
 		}
 		return nil
 	})
@@ -410,19 +416,10 @@ func keyParser(k string) ([]byte, string, error) {
 	return []byte(key), db, nil
 }
 
-func openKV(name string) (*badger.DB, error) {
-	if name == "" {
-		name = "default"
-	}
-	path, err := getFilePath(name)
-	if err != nil {
-		return nil, err
-	}
-	return badger.Open(badger.DefaultOptions(path).WithLoggingLevel(badger.ERROR)) //nolint:wrapcheck
-}
-
 func init() {
 	rootCmd.PersistentFlags().StringVar(&storePath, "store", "", "path to the Skate store (defaults to SKATE_STORE or the user data directory)")
+	rootCmd.PersistentFlags().StringVar(&backendFlag, "backend", "", "storage backend: badger or ditto (defaults to SKATE_BACKEND, then badger)")
+	syncCmd.Flags().DurationVar(&syncTimeout, "timeout", 0, "stop syncing after this long (default: run until interrupted)")
 
 	listCmd.Flags().BoolVarP(&reverseIterate, "reverse", "r", false, "list in reverse lexicographic order")
 	listCmd.Flags().BoolVarP(&keysIterate, "keys-only", "k", false, "only print keys and don't fetch values from the db")
@@ -439,6 +436,7 @@ func init() {
 		listCmd,
 		listDbsCmd,
 		deleteDbCmd,
+		syncCmd,
 	)
 }
 
@@ -447,13 +445,4 @@ func main() {
 		fmt.Fprint(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-func wrap(db *badger.DB, readonly bool, fn func(tx *badger.Txn) error) error {
-	tx := db.NewTransaction(!readonly)
-	if err := fn(tx); err != nil {
-		tx.Discard()
-		return err
-	}
-	return tx.Commit() //nolint:wrapcheck
 }

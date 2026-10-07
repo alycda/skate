@@ -1,0 +1,76 @@
+# set, get, and reading a value from stdin
+exec skate set kitty meow
+exec skate get kitty
+stdout '^meow$'
+
+stdin value.txt
+exec skate set stdin-key
+exec skate get stdin-key
+stdout '^from stdin$'
+
+# keys are case-insensitive
+exec skate set MiXed v
+exec skate get mixed
+stdout '^v$'
+
+# overwrite
+exec skate set kitty purr
+exec skate get kitty
+stdout '^purr$'
+! stdout meow
+
+# list: sorted, and its output filters
+exec skate set b 2
+exec skate set a 1
+exec skate list -k
+cmp stdout keys.txt
+exec skate list -k -r
+cmp stdout keys-reversed.txt
+exec skate list -v
+cmp stdout values.txt
+exec skate list -d , a
+stdout '^a,1$'
+exec skate list
+stdout '^a\t1$'
+stdout '^kitty\tpurr$'
+
+# delete, by every name it goes by
+exec skate delete kitty
+! exec skate get kitty
+stderr 'Key not found'
+exec skate rm a
+! exec skate get a
+exec skate del b
+exec skate list -k
+! stdout '^b$'
+
+# a missing key is an error with a non-zero exit
+! exec skate get never-set
+stderr 'Key not found'
+
+# arity
+! exec skate get
+! exec skate set
+! exec skate get a b
+
+-- value.txt --
+from stdin
+-- keys.txt --
+a
+b
+kitty
+mixed
+stdin-key
+-- keys-reversed.txt --
+stdin-key
+mixed
+kitty
+b
+a
+-- values.txt --
+1
+2
+purr
+v
+from stdin
+

@@ -1,0 +1,34 @@
+# Missing settings are named, so the fix is obvious.
+env SKATE_DITTO_URL=
+! exec skate get x
+stderr 'SKATE_DITTO_URL'
+! exec skate list-dbs
+stderr 'SKATE_DITTO_URL'
+
+env SKATE_DITTO_URL=https://example.invalid
+env SKATE_DITTO_DATABASE_ID=
+! exec skate get x
+stderr 'SKATE_DITTO_DATABASE_ID'
+env SKATE_DITTO_DATABASE_ID=00000000-0000-4000-8000-000000000000
+
+# Only sync needs the token.
+exec skate set k v
+! exec skate sync --timeout 1s
+stderr 'SKATE_DITTO_TOKEN'
+
+# sync is for the ditto backend.
+env SKATE_BACKEND=badger
+! exec skate sync --timeout 1s
+stderr 'sync needs the ditto backend'
+env SKATE_BACKEND=ditto
+
+# A bad log level is rejected instead of silently ignored.
+env SKATE_DITTO_LOG_LEVEL=loud
+! exec skate get k
+stderr 'unknown level "loud"'
+env SKATE_DITTO_LOG_LEVEL=
+
+# The SDK stays quiet by default.
+exec skate get k
+stdout '^v$'
+! stderr .

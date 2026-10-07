@@ -1,0 +1,3 @@
+# testscript fixtures are compared byte for byte with program output, which
+# uses LF on every platform, so keep them LF in a Windows checkout too.
+*.txtar text eol=lf

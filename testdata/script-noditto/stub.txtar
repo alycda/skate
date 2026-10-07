@@ -1,0 +1,25 @@
+# This build has no ditto backend. Every way into it says so, and says how to
+# get one.
+! exec skate --backend ditto get x
+stderr 'does not include the ditto backend'
+stderr '-tags ditto'
+
+env SKATE_BACKEND=ditto
+! exec skate set x y
+stderr 'does not include the ditto backend'
+! exec skate list
+stderr 'does not include the ditto backend'
+! exec skate list-dbs
+stderr 'does not include the ditto backend'
+! exec skate delete-db @x
+stderr 'does not include the ditto backend'
+
+# sync needs ditto whichever backend was picked
+env SKATE_BACKEND=
+! exec skate sync
+stderr 'does not include the ditto backend'
+
+# and badger keeps working in the same binary
+exec skate set k v
+exec skate get k
+stdout '^v$'

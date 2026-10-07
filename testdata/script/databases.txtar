@@ -1,0 +1,47 @@
+# @db keeps keys apart
+exec skate set secret@work hunter2
+exec skate get secret@work
+stdout '^hunter2$'
+! exec skate get secret
+stderr 'Key not found'
+exec skate set secret plain
+exec skate get secret
+stdout '^plain$'
+exec skate list @work
+stdout '^secret\thunter2$'
+! stdout plain
+
+# list-dbs
+exec skate list-dbs
+cmp stdout dbs.txt
+exec skate ls-db
+cmp stdout dbs.txt
+
+# a key can only name one db
+! exec skate set a@b@c v
+stderr 'bad key format'
+
+# delete-db: declined, then typo, then confirmed
+stdin no.txt
+exec skate delete-db @work
+stderr 'Did not delete'
+exec skate list-dbs
+stdout '^@work$'
+
+! exec skate delete-db @wrk
+stderr 'did you mean "@work"'
+
+stdin yes.txt
+exec skate delete-db @work
+stderr 'Deleted'
+exec skate list-dbs
+! stdout '^@work$'
+stdout '^@default$'
+
+-- dbs.txt --
+@default
+@work
+-- no.txt --
+n
+-- yes.txt --
+y

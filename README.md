@@ -148,6 +148,85 @@ export SKATE_STORE=~/.local/share/my-skate-store
 skate list-dbs
 ```
 
+### Ditto Backend (experimental)
+
+Skate can store its data in [Ditto](https://docs.ditto.live/) instead of
+Badger, which lets it replicate between your devices. This is opt-in, and it
+needs a build with the `ditto` tag: the SDK is a cgo wrapper around a native
+library, and it is in Public Preview (`5.0.0-go-preview.3`). The default build
+and the release binaries do not include it, and `--backend ditto` on one of
+them tells you so.
+
+**Platforms.** Linux (x86_64, aarch64) and macOS (aarch64) only, Go 1.24 or
+later. There is no Windows support.
+
+**Build.** Download the native library for your platform from
+`https://software.ditto.live/go/Ditto/5.0.0-go-preview.3/dist/`
+(`libdittoffi-linux-x86_64.tar.gz`, `libdittoffi-linux-aarch64.tar.gz` or
+`libdittoffi-macos-aarch64.tar.gz`) and unpack it into `/usr/local/lib`, where
+the Ditto docs say the SDK links it automatically. For another location, add
+`-ldflags='-extldflags "-L/path/to/lib"'` to the build and set
+`LD_LIBRARY_PATH` (Linux) or `DYLD_LIBRARY_PATH` (macOS) when running; see the
+[Ditto Go install guide](https://docs.ditto.live/sdk/latest/install-guides/go).
+Then build from a checkout:
+
+```bash
+CGO_ENABLED=1 go build -tags ditto -o skate .
+```
+
+**Configure.** Create a database in the Ditto Portal, then:
+
+```bash
+export SKATE_BACKEND=ditto                  # or pass --backend ditto
+export SKATE_DITTO_DATABASE_ID=...          # your database ID
+export SKATE_DITTO_URL=...                  # your database's server URL
+export SKATE_DITTO_TOKEN=...                # development token; only `skate sync` needs it
+```
+
+Every command then works as usual against Ditto's local store, which lives in
+`.ditto-<database id>` inside the Skate store directory (`--store` and
+`SKATE_STORE` apply). All Skate databases (`@db`) live in one Ditto
+collection, `skate_kv`.
+
+**Syncing.** Writes are local until you sync. `skate sync` replicates with
+Ditto until you press Ctrl-C, or for `--timeout`:
+
+```bash
+skate set kitty meow
+skate sync --timeout 30s
+```
+
+Things to know:
+
+- Ditto holds an exclusive lock on its directory, so while `skate sync` runs,
+  other Skate commands on the Ditto backend fail with a "File already locked"
+  error. Prefer `--timeout` over leaving it running.
+- Skate does not know when replication has finished. `--timeout` is a fixed
+  window, not a "sync until caught up".
+- `skate delete-db` on the Ditto backend issues a Ditto `DELETE`, which
+  replicates to peers on the next sync rather than only removing local data.
+- Authentication uses Ditto's development provider, which is meant for
+  prototypes. Production auth is not implemented.
+- The SDK logs only errors by default. Set `SKATE_DITTO_LOG_LEVEL` to
+  `warning`, `info`, `debug` or `verbose` when troubleshooting sync.
+- Binary values are stored base64-encoded, so they are not readable in the
+  Ditto Portal. Keys must be valid UTF-8.
+
+**Testing.** `go test ./...` covers the default build. `go test -tags ditto
+./...` also runs the backend against Ditto's local store and drives the CLI
+with the scripts in `testdata/script-ditto`; it needs the native library on the
+linker and loader paths. The `ditto` workflow does this in CI. Neither starts
+real sync. To check your Portal setup before running `skate sync`, use the
+[hurl](https://hurl.dev) files in `test/hurl`:
+
+```bash
+hurl --test --variable auth_url=<Auth URL> --variable database_id=<Database ID> \
+  test/hurl/ditto-auth-reachable.hurl
+```
+
+`ditto-auth-reachable.hurl` needs no token. `ditto-auth-login.hurl` also takes
+`--variable token=<development token>`; read the caveat at its top.
+
 ## Examples
 
 Here are some of our favorite ways to use `skate`.

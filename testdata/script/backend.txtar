@@ -1,0 +1,19 @@
+# an unknown backend is rejected, whichever way it was asked for
+! exec skate --backend nope get x
+stderr 'unknown backend "nope"'
+
+env SKATE_BACKEND=nope
+! exec skate get x
+stderr 'unknown backend "nope"'
+! exec skate list-dbs
+stderr 'unknown backend "nope"'
+
+# the flag beats the environment
+exec skate --backend badger set k v
+exec skate --backend badger get k
+stdout '^v$'
+
+# badger is what you get with neither
+env SKATE_BACKEND=
+exec skate get k
+stdout '^v$'
