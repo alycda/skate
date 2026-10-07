@@ -13,6 +13,11 @@ import (
 // re-executes this test binary with main() as the `skate` command, so each
 // `exec skate ...` is a fresh process, like a user's shell would give.
 func TestMain(m *testing.M) {
+	// On Windows, exec looks in the current directory before PATH. `go build`
+	// leaves skate.exe in the package directory, where it would shadow the
+	// testscript command and fail with "cannot run executable found relative
+	// to current directory". Setting this (to any value) turns that lookup off.
+	os.Setenv("NoDefaultCurrentDirectoryInExePath", "1")
 	os.Exit(testscript.RunMain(m, map[string]func() int{
 		"skate": func() int {
 			main()
